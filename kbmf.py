@@ -16,9 +16,9 @@ class KBMF:
         self.num_factors = num_factors
 
     def fix_model(self, W, intMat, drugMat, targetMat, seed=None):
-        R = W*intMat
-        drugMat = (drugMat+drugMat.T)/2
-        targetMat = (targetMat+targetMat.T)/2
+        R = W * intMat
+        drugMat = (drugMat + drugMat.T) / 2
+        targetMat = (targetMat + targetMat.T) / 2
         mlab = Matlab()
         mlab.start()
         # print os.getcwd()
@@ -31,7 +31,7 @@ class KBMF:
         inx = np.array(test_data)
         return self.predictR[inx[:, 0], inx[:, 1]]
 
-    def evaluation(self, test_data, test_label):
+    def evaluation(self, test_data, test_label, intMat):
         scores = self.predictR[test_data[:, 0], test_data[:, 1]]
         prec, rec, thr = precision_recall_curve(test_label, scores)
         aupr_val = auc(rec, prec)

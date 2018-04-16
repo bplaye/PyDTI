@@ -24,36 +24,51 @@ class NetLapRLS:
         self.beta_d = float(beta_d)
         self.beta_t = float(beta_t)
 
-    def fix_model(self,  W, intMat, drugMat, targetMat, seed=None):
-        R = W*intMat
+    def fix_model(self, W, intMat, drugMat, targetMat, seed=None):
+        R = W * intMat
         m, n = R.shape
-        drugMat = (drugMat+drugMat.T)/2
-        targetMat = (targetMat+targetMat.T)/2
-        Wd = (drugMat+self.gamma_d*np.dot(R, R.T))/(1.0+self.gamma_d)
-        Wt = (targetMat+self.gamma_t*np.dot(R.T, R))/(1.0+self.gamma_t)
-        Wd = Wd-np.diag(np.diag(Wd))
-        Wt = Wt-np.diag(np.diag(Wt))
+        drugMat = (drugMat + drugMat.T) / 2
+        targetMat = (targetMat + targetMat.T) / 2
+        Wd = (drugMat + self.gamma_d * np.dot(R, R.T)) / (1.0 + self.gamma_d)
+        Wt = (targetMat + self.gamma_t * np.dot(R.T, R)) / (1.0 + self.gamma_t)
+        Wd = Wd - np.diag(np.diag(Wd))
+        Wt = Wt - np.diag(np.diag(Wt))
 
-        D = np.diag(np.sqrt(1.0/np.sum(Wd, axis=1)))
+        D = np.diag(np.sqrt(1.0 / np.sum(Wd, axis=1)))
         Ld = np.eye(m) - np.dot(np.dot(D, Wd), D)
-        D = np.diag(np.sqrt(1.0/np.sum(Wt, axis=1)))
+        D = np.diag(np.sqrt(1.0 / np.sum(Wt, axis=1)))
         Lt = np.eye(n) - np.dot(np.dot(D, Wt), D)
 
-        X = np.linalg.inv(Wd+self.beta_d*np.dot(Ld, Wd))
+        X = np.linalg.inv(Wd + self.beta_d * np.dot(Ld, Wd))
         Fd = np.dot(np.dot(Wd, X), R)
-        X = np.linalg.inv(Wt+self.beta_t*np.dot(Lt, Wt))
+        X = np.linalg.inv(Wt + self.beta_t * np.dot(Lt, Wt))
         Ft = np.dot(np.dot(Wt, X), R.T)
-        self.predictR = 0.5*(Fd+Ft.T)
+        self.predictR = 0.5 * (Fd + Ft.T)
 
     def predict_scores(self, test_data, N):
         inx = np.array(test_data)
         return self.predictR[inx[:, 0], inx[:, 1]]
 
-    def evaluation(self, test_data, test_label):
+    def evaluation(self, test_data, test_label, intMat):
         scores = self.predictR[test_data[:, 0], test_data[:, 1]]
         prec, rec, thr = precision_recall_curve(test_label, scores)
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, scores)
+        auc_val = auc(fpr, tpr)
+        return aupr_val, auc_val
+
+    def predict(self, test_data):
+        ii, jj = test_data[:, 0], test_data[:, 1]
+        scores = self.predictR[ii, jj]
+        self.pred[ii, jj] = scores
+
+    def get_perf(self, intMat):
+        pred_ind = np.where(self.pred != np.inf)
+        pred_local = self.pred[pred_ind[0], pred_ind[1]]
+        test_local = intMat[pred_ind[0], pred_ind[1]]
+        prec, rec, thr = precision_recall_curve(test_local, pred_local)
+        aupr_val = auc(rec, prec)
+        fpr, tpr, thr = roc_curve(test_local, pred_local)
         auc_val = auc(fpr, tpr)
         return aupr_val, auc_val
 

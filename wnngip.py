@@ -31,9 +31,9 @@ class WNNGIP:
                 w = self.T**(i)
                 if w >= 1e-4:
                     if drug:
-                        R[d, :] += w*R[inx[i], :]
+                        R[d, :] += w * R[inx[i], :]
                     else:
-                        R[:, d] += w*R[:, inx[i]]
+                        R[:, d] += w * R[:, inx[i]]
                 else:
                     break
 
@@ -41,33 +41,33 @@ class WNNGIP:
         m, n = R.shape
         ld, vd = np.linalg.eig(Kd)
         lt, vt = np.linalg.eig(Kt)
-        vec = ld.reshape((ld.size, 1))*lt.reshape((1, lt.size))
+        vec = ld.reshape((ld.size, 1)) * lt.reshape((1, lt.size))
         vec = vec.reshape((1, vec.size))
-        x = vec*(1.0/(vec+self.sigma))
+        x = vec * (1.0 / (vec + self.sigma))
         y = np.dot(np.dot(vt.T, R.T), vd)
         y = y.reshape((1, y.size))
-        z = (x*y).reshape((n, m))  # need to check
+        z = (x * y).reshape((n, m))  # need to check
         self.predictR = np.dot(np.dot(vd, z.T), vt.T)
 
     def kernel_combination(self, R, S, new_inx, bandwidth):
-        K = self.alpha*S+(1.0-self.alpha)*rbf_kernel(R, gamma=bandwidth)
+        K = self.alpha * S + (1.0 - self.alpha) * rbf_kernel(R, gamma=bandwidth)
         K[new_inx, :] = S[new_inx, :]
         K[:, new_inx] = S[:, new_inx]
         return K
 
     def fix_model(self, W, intMat, drugMat, targetMat, seed=None, epsilon=0.1):
-        R = W*intMat
+        R = W * intMat
         m, n = intMat.shape
         x, y = np.where(R > 0)
         # Enforce the positive definite property of similarity matrix
-        drugMat = (drugMat+drugMat.T)/2 + epsilon*np.eye(m)
-        targetMat = (targetMat+targetMat.T)/2 + epsilon*np.eye(n)
+        drugMat = (drugMat + drugMat.T) / 2 + epsilon * np.eye(m)
+        targetMat = (targetMat + targetMat.T) / 2 + epsilon * np.eye(n)
         train_drugs = np.array(list(set(x.tolist())), dtype=np.int32)
         train_targets = np.array(list(set(y.tolist())), dtype=np.int32)
         new_drugs = np.array(list(set(xrange(m)) - set(x.tolist())), dtype=np.int32)
         new_targets = np.array(list(set(xrange(n)) - set(y.tolist())), dtype=np.int32)
-        drug_bw = self.gamma*m/len(x)
-        target_bw = self.gamma*n/len(x)
+        drug_bw = self.gamma * m / len(x)
+        target_bw = self.gamma * n / len(x)
         Kd = self.kernel_combination(R, drugMat, new_drugs, drug_bw)
         Kt = self.kernel_combination(R.T, targetMat, new_targets, target_bw)
         self.preprocess_wnn(R, drugMat, train_drugs, new_drugs, True)
@@ -78,11 +78,26 @@ class WNNGIP:
         inx = np.array(test_data)
         return self.predictR[inx[:, 0], inx[:, 1]]
 
-    def evaluation(self, test_data, test_label):
+    def evaluation(self, test_data, test_label, intMat):
         scores = self.predictR[test_data[:, 0], test_data[:, 1]]
         prec, rec, thr = precision_recall_curve(test_label, scores)
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, scores)
+        auc_val = auc(fpr, tpr)
+        return aupr_val, auc_val
+
+    def predict(self, test_data):
+        ii, jj = test_data[:, 0], test_data[:, 1]
+        scores = self.predictR[ii, jj]
+        self.pred[ii, jj] = scores
+
+    def get_perf(self, intMat):
+        pred_ind = np.where(self.pred != np.inf)
+        pred_local = self.pred[pred_ind[0], pred_ind[1]]
+        test_local = intMat[pred_ind[0], pred_ind[1]]
+        prec, rec, thr = precision_recall_curve(test_local, pred_local)
+        aupr_val = auc(rec, prec)
+        fpr, tpr, thr = roc_curve(test_local, pred_local)
         auc_val = auc(fpr, tpr)
         return aupr_val, auc_val
 

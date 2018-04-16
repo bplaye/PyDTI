@@ -22,12 +22,12 @@ class NRLMF:
 
     def AGD_optimization(self, seed=None):
         if seed is None:
-            self.U = np.sqrt(1/float(self.num_factors))*np.random.normal(size=(self.num_drugs, self.num_factors))
-            self.V = np.sqrt(1/float(self.num_factors))*np.random.normal(size=(self.num_targets, self.num_factors))
+            self.U = np.sqrt(1 / float(self.num_factors)) * np.random.normal(size=(self.num_drugs, self.num_factors))
+            self.V = np.sqrt(1 / float(self.num_factors)) * np.random.normal(size=(self.num_targets, self.num_factors))
         else:
             prng = np.random.RandomState(seed)
-            self.U = np.sqrt(1/float(self.num_factors))*prng.normal(size=(self.num_drugs, self.num_factors))
-            self.V = np.sqrt(1/float(self.num_factors))*prng.normal(size=(self.num_targets, self.num_factors))
+            self.U = np.sqrt(1 / float(self.num_factors)) * prng.normal(size=(self.num_drugs, self.num_factors))
+            self.V = np.sqrt(1 / float(self.num_factors)) * prng.normal(size=(self.num_targets, self.num_factors))
         dg_sum = np.zeros((self.num_drugs, self.U.shape[1]))
         tg_sum = np.zeros((self.num_targets, self.V.shape[1]))
         last_log = self.log_likelihood()
@@ -41,7 +41,7 @@ class NRLMF:
             vec_step_size = self.theta / np.sqrt(tg_sum)
             self.V += vec_step_size * tg
             curr_log = self.log_likelihood()
-            delta_log = (curr_log-last_log)/abs(last_log)
+            delta_log = (curr_log - last_log) / abs(last_log)
             if abs(delta_log) < 1e-5:
                 break
             last_log = curr_log
@@ -57,10 +57,10 @@ class NRLMF:
         A = self.intMat1 * A
         if drug:
             vec_deriv -= np.dot(A, self.V)
-            vec_deriv -= self.lambda_d*self.U+self.alpha*np.dot(self.DL, self.U)
+            vec_deriv -= self.lambda_d * self.U + self.alpha * np.dot(self.DL, self.U)
         else:
             vec_deriv -= np.dot(A.T, self.U)
-            vec_deriv -= self.lambda_t*self.V+self.beta*np.dot(self.TL, self.V)
+            vec_deriv -= self.lambda_t * self.V + self.beta * np.dot(self.TL, self.V)
         return vec_deriv
 
     def log_likelihood(self):
@@ -73,7 +73,7 @@ class NRLMF:
         A = np.log(A)
         A = self.intMat1 * A
         loglik -= np.sum(A)
-        loglik -= 0.5 * self.lambda_d * np.sum(np.square(self.U))+0.5 * self.lambda_t * np.sum(np.square(self.V))
+        loglik -= 0.5 * self.lambda_d * np.sum(np.square(self.U)) + 0.5 * self.lambda_t * np.sum(np.square(self.V))
         loglik -= 0.5 * self.alpha * np.sum(np.diag((np.dot(self.U.T, self.DL)).dot(self.U)))
         loglik -= 0.5 * self.beta * np.sum(np.diag((np.dot(self.V.T, self.TL)).dot(self.V)))
         return loglik
@@ -93,7 +93,7 @@ class NRLMF:
     def laplacian_matrix(self, S):
         x = np.sum(S, axis=0)
         y = np.sum(S, axis=1)
-        L = 0.5*(np.diag(x+y) - (S+S.T))  # neighborhood regularization matrix
+        L = 0.5 * (np.diag(x + y) - (S + S.T))  # neighborhood regularization matrix
         return L
 
     def get_nearest_neighbors(self, S, size=5):
@@ -107,8 +107,8 @@ class NRLMF:
     def fix_model(self, W, intMat, drugMat, targetMat, seed=None):
         self.num_drugs, self.num_targets = intMat.shape
         self.ones = np.ones((self.num_drugs, self.num_targets))
-        self.intMat = self.cfix*intMat*W
-        self.intMat1 = (self.cfix-1)*intMat*W + self.ones
+        self.intMat = self.cfix * intMat * W
+        self.intMat1 = (self.cfix - 1) * intMat * W + self.ones
         x, y = np.where(self.intMat > 0)
         self.train_drugs, self.train_targets = set(x.tolist()), set(y.tolist())
         self.construct_neighborhood(drugMat, targetMat)
@@ -123,24 +123,24 @@ class NRLMF:
         for d, t in test_data:
             if d in self.train_drugs:
                 if t in self.train_targets:
-                    val = np.sum(self.U[d, :]*self.V[t, :])
+                    val = np.sum(self.U[d, :] * self.V[t, :])
                 else:
                     jj = np.argsort(TS[t, :])[::-1][:N]
-                    val = np.sum(self.U[d, :]*np.dot(TS[t, jj], self.V[tinx[jj], :]))/np.sum(TS[t, jj])
+                    val = np.sum(self.U[d, :] * np.dot(TS[t, jj], self.V[tinx[jj], :])) / np.sum(TS[t, jj])
             else:
                 if t in self.train_targets:
                     ii = np.argsort(DS[d, :])[::-1][:N]
-                    val = np.sum(np.dot(DS[d, ii], self.U[dinx[ii], :])*self.V[t, :])/np.sum(DS[d, ii])
+                    val = np.sum(np.dot(DS[d, ii], self.U[dinx[ii], :]) * self.V[t, :]) / np.sum(DS[d, ii])
                 else:
                     ii = np.argsort(DS[d, :])[::-1][:N]
                     jj = np.argsort(TS[t, :])[::-1][:N]
-                    v1 = DS[d, ii].dot(self.U[dinx[ii], :])/np.sum(DS[d, ii])
-                    v2 = TS[t, jj].dot(self.V[tinx[jj], :])/np.sum(TS[t, jj])
-                    val = np.sum(v1*v2)
-            scores.append(np.exp(val)/(1+np.exp(val)))
+                    v1 = DS[d, ii].dot(self.U[dinx[ii], :]) / np.sum(DS[d, ii])
+                    v2 = TS[t, jj].dot(self.V[tinx[jj], :]) / np.sum(TS[t, jj])
+                    val = np.sum(v1 * v2)
+            scores.append(np.exp(val) / (1 + np.exp(val)))
         return np.array(scores)
 
-    def evaluation(self, test_data, test_label):
+    def evaluation(self, test_data, test_label, intMat):
         dinx = np.array(list(self.train_drugs))
         DS = self.dsMat[:, dinx]
         tinx = np.array(list(self.train_targets))
@@ -150,28 +150,72 @@ class NRLMF:
             for d, t in test_data:
                 if d in self.train_drugs:
                     if t in self.train_targets:
-                        val = np.sum(self.U[d, :]*self.V[t, :])
+                        val = np.sum(self.U[d, :] * self.V[t, :])
                     else:
                         jj = np.argsort(TS[t, :])[::-1][:self.K2]
-                        val = np.sum(self.U[d, :]*np.dot(TS[t, jj], self.V[tinx[jj], :]))/np.sum(TS[t, jj])
+                        val = np.sum(self.U[d, :] * np.dot(TS[t, jj], self.V[tinx[jj], :])) / np.sum(TS[t, jj])
                 else:
                     if t in self.train_targets:
                         ii = np.argsort(DS[d, :])[::-1][:self.K2]
-                        val = np.sum(np.dot(DS[d, ii], self.U[dinx[ii], :])*self.V[t, :])/np.sum(DS[d, ii])
+                        val = np.sum(np.dot(DS[d, ii], self.U[dinx[ii], :]) * self.V[t, :]) / np.sum(DS[d, ii])
                     else:
                         ii = np.argsort(DS[d, :])[::-1][:self.K2]
                         jj = np.argsort(TS[t, :])[::-1][:self.K2]
-                        v1 = DS[d, ii].dot(self.U[dinx[ii], :])/np.sum(DS[d, ii])
-                        v2 = TS[t, jj].dot(self.V[tinx[jj], :])/np.sum(TS[t, jj])
-                        val = np.sum(v1*v2)
-                scores.append(np.exp(val)/(1+np.exp(val)))
+                        v1 = DS[d, ii].dot(self.U[dinx[ii], :]) / np.sum(DS[d, ii])
+                        v2 = TS[t, jj].dot(self.V[tinx[jj], :]) / np.sum(TS[t, jj])
+                        val = np.sum(v1 * v2)
+                scores.append(np.exp(val) / (1 + np.exp(val)))
         elif self.K2 == 0:
             for d, t in test_data:
-                val = np.sum(self.U[d, :]*self.V[t, :])
-                scores.append(np.exp(val)/(1+np.exp(val)))
+                val = np.sum(self.U[d, :] * self.V[t, :])
+                scores.append(np.exp(val) / (1 + np.exp(val)))
         prec, rec, thr = precision_recall_curve(test_label, np.array(scores))
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, np.array(scores))
+        auc_val = auc(fpr, tpr)
+        return aupr_val, auc_val
+
+    def predict(self, test_data):
+        ii, jj = test_data[:, 0], test_data[:, 1]
+
+        dinx = np.array(list(self.train_drugs))
+        DS = self.dsMat[:, dinx]
+        tinx = np.array(list(self.train_targets))
+        TS = self.tsMat[:, tinx]
+        scores = []
+        if self.K2 > 0:
+            for d, t in test_data:
+                if d in self.train_drugs:
+                    if t in self.train_targets:
+                        val = np.sum(self.U[d, :] * self.V[t, :])
+                    else:
+                        jj = np.argsort(TS[t, :])[::-1][:self.K2]
+                        val = np.sum(self.U[d, :] * np.dot(TS[t, jj], self.V[tinx[jj], :])) / np.sum(TS[t, jj])
+                else:
+                    if t in self.train_targets:
+                        ii = np.argsort(DS[d, :])[::-1][:self.K2]
+                        val = np.sum(np.dot(DS[d, ii], self.U[dinx[ii], :]) * self.V[t, :]) / np.sum(DS[d, ii])
+                    else:
+                        ii = np.argsort(DS[d, :])[::-1][:self.K2]
+                        jj = np.argsort(TS[t, :])[::-1][:self.K2]
+                        v1 = DS[d, ii].dot(self.U[dinx[ii], :]) / np.sum(DS[d, ii])
+                        v2 = TS[t, jj].dot(self.V[tinx[jj], :]) / np.sum(TS[t, jj])
+                        val = np.sum(v1 * v2)
+                scores.append(np.exp(val) / (1 + np.exp(val)))
+        elif self.K2 == 0:
+            for d, t in test_data:
+                val = np.sum(self.U[d, :] * self.V[t, :])
+                scores.append(np.exp(val) / (1 + np.exp(val)))
+
+        self.pred[ii, jj] = scores
+
+    def get_perf(self, intMat):
+        pred_ind = np.where(self.pred != np.inf)
+        pred_local = self.pred[pred_ind[0], pred_ind[1]]
+        test_local = intMat[pred_ind[0], pred_ind[1]]
+        prec, rec, thr = precision_recall_curve(test_local, pred_local)
+        aupr_val = auc(rec, prec)
+        fpr, tpr, thr = roc_curve(test_local, pred_local)
         auc_val = auc(fpr, tpr)
         return aupr_val, auc_val
 
