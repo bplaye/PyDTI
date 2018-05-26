@@ -71,20 +71,20 @@ class CMF:
             self.lambda_t * np.linalg.norm(targetMat - self.V.dot(self.V.T), "fro")**(2)
         return 0.5 * loss
 
-    def evaluation(self, test_data, test_label, intMat):
+    def evaluation(self, test_data, test_label, intMat, R):
         ii, jj = test_data[:, 0], test_data[:, 1]
         scores = np.sum(self.U[ii, :] * self.V[jj, :], axis=1)
         prec, rec, thr = precision_recall_curve(test_label, scores)
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, scores)
         auc_val = auc(fpr, tpr)
-        return aupr_val, auc_val
+        return aupr_val, auc_val, scores
 
     def predict_scores(self, test_data, N):
         inx = np.array(test_data)
         return np.sum(self.U[inx[:, 0], :] * self.V[inx[:, 1], :], axis=1)
 
-    def predict(self, test_data):
+    def predict(self, test_data, R):
         ii, jj = test_data[:, 0], test_data[:, 1]
         scores = np.sum(self.U[ii, :] * self.V[jj, :], axis=1)
         self.pred[ii, jj] = scores

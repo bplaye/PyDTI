@@ -49,15 +49,15 @@ class NetLapRLS:
         inx = np.array(test_data)
         return self.predictR[inx[:, 0], inx[:, 1]]
 
-    def evaluation(self, test_data, test_label, intMat):
+    def evaluation(self, test_data, test_label, intMat, R):
         scores = self.predictR[test_data[:, 0], test_data[:, 1]]
         prec, rec, thr = precision_recall_curve(test_label, scores)
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, scores)
         auc_val = auc(fpr, tpr)
-        return aupr_val, auc_val
+        return aupr_val, auc_val, scores
 
-    def predict(self, test_data):
+    def predict(self, test_data, R):
         ii, jj = test_data[:, 0], test_data[:, 1]
         scores = self.predictR[ii, jj]
         self.pred[ii, jj] = scores

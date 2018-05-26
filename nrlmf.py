@@ -140,7 +140,7 @@ class NRLMF:
             scores.append(np.exp(val) / (1 + np.exp(val)))
         return np.array(scores)
 
-    def evaluation(self, test_data, test_label, intMat):
+    def evaluation(self, test_data, test_label, intMat, R):
         dinx = np.array(list(self.train_drugs))
         DS = self.dsMat[:, dinx]
         tinx = np.array(list(self.train_targets))
@@ -173,9 +173,9 @@ class NRLMF:
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, np.array(scores))
         auc_val = auc(fpr, tpr)
-        return aupr_val, auc_val
+        return aupr_val, auc_val, np.array(scores)
 
-    def predict(self, test_data):
+    def predict(self, test_data, R, true_test_data=None):
         ii, jj = test_data[:, 0], test_data[:, 1]
 
         dinx = np.array(list(self.train_drugs))
@@ -207,7 +207,11 @@ class NRLMF:
                 val = np.sum(self.U[d, :] * self.V[t, :])
                 scores.append(np.exp(val) / (1 + np.exp(val)))
 
-        self.pred[ii, jj] = scores
+        if true_test_data is not None:
+            ii, jj = true_test_data[:, 0], true_test_data[:, 1]
+            self.pred[ii, jj] = scores
+        else:
+            self.pred[ii, jj] = scores
 
     def get_perf(self, intMat):
         pred_ind = np.where(self.pred != np.inf)

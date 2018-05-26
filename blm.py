@@ -68,7 +68,7 @@ class BLMNII:
             scores = np.maximum(self.Y1[x, y], self.Y2.T[x, y])
         return scores
 
-    def evaluation(self, test_data, test_label, intMat):
+    def evaluation(self, test_data, test_label, intMat, R):
         x, y = test_data[:, 0], test_data[:, 1]
         if self.avg:
             scores = 0.5 * (self.Y1[x, y] + self.Y2.T[x, y])
@@ -78,9 +78,9 @@ class BLMNII:
         aupr_val = auc(rec, prec)
         fpr, tpr, thr = roc_curve(test_label, scores)
         auc_val = auc(fpr, tpr)
-        return aupr_val, auc_val
+        return aupr_val, auc_val, scores
 
-    def predict(self, test_data):
+    def predict(self, test_data, R):
         x, y = test_data[:, 0], test_data[:, 1]
         if self.avg:
             scores = 0.5 * (self.Y1[x, y] + self.Y2.T[x, y])

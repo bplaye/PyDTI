@@ -10,6 +10,27 @@ import copy
 import pickle
 import pandas as pd
 import csv
+import multiprocessing
+from sklearn.metrics.pairwise import rbf_kernel
+
+
+def get_pred(tup):
+  model, ind_couples, couple_test = tup
+  return model.get_pred(ind_couples, couple_test)
+
+
+def get_pred_joblib(tup):
+  model, ind_couples, couple_test = tup
+  return model.get_pred(ind_couples, couple_test), ind_couples
+
+
+def get_pred_joblib2(list_tup):
+  list_pred = []
+  for tup in list_tup:
+    model, ind_couples, couple_test = tup
+    pred = model.get_pred(ind_couples, couple_test)
+    list_pred.append((pred, ind_couples))
+  return list_pred
 
 
 def randomize_list(list_to_be_randomized):
@@ -23,82 +44,91 @@ def randomize_list(list_to_be_randomized):
 
 
 class NNKronSVM():
-  def __init__(self, C, NbNeg, NegNei, PosNei, dataset):
+  def __init__(self, C, NbNeg, NegNei, PosNei, dataset, n_proc):
     self.NbNeg = NbNeg
     self.PosNei = PosNei
     self.NegNei = NegNei
     self.C = C
+    self.n_proc = n_proc
+    self.alpha = 0.5
+    self.gamma = 1.0
 
+    if 'drugbank' in dataset:
+        if '2000' in dataset:
+            limit = 2000
+        elif '5000' in dataset:
+            limit = 5000
+        else:
+            limit = None
+        dataset = 'DrugBank'
+    else:
+        limit = None
     self.dico_neerest_nei_per_prot_ID = \
         pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_prot_ID.data', 'rb'))
+    print(1)
     self.dico_neerest_nei_per_prot_value = \
         pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_prot_value.data', 'rb'))
+    print(2)
     self.dico_neerest_nei_per_mol_ID = \
         pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_mol_ID.data', 'rb'))
+    print(3)
     self.dico_neerest_nei_per_mol_value = \
         pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_mol_value.data', 'rb'))
+    print(4)
 
     self.dico_target_of_mol = \
         pickle.load(open('data/' + dataset + '_dico_target_of_mol.data', 'rb'))
+    print(1)
     self.dico_ligand_of_prot = \
         pickle.load(open('data/' + dataset + '_dico_ligand_of_prot.data', 'rb'))
+    print(2)
     self.dico_labels_per_couple = \
         pickle.load(open('data/' + dataset + '_dico_labels_per_couple.data', 'rb'))
+    print(3)
 
     self.dico_prot2indice = pickle.load(open('data/' + dataset + '_dico_prot2indice.data', 'rb'))
+    print(1)
     self.dico_mol2indice = pickle.load(open('data/' + dataset + '_dico_mol2indice.data', 'rb'))
+    print(2)
     self.dico_indice2prot = pickle.load(open('data/' + dataset + '_dico_indice2prot.data', 'rb'))
+    print(3)
     self.dico_indice2mol = pickle.load(open('data/' + dataset + '_dico_indice2mol.data', 'rb'))
+    print(4)
 
     self.threshold_prot = None
     self.threshold_mol = None
 
-  def fix_model(self, W, intMat, drugMat, targetMat, seed):
-    self.K_prot = targetMat
-    self.K_mol = drugMat
-    test_data = np.where(W == 0)
-    self.list_couple_test = [(self.dico_indice2prot[test_data[1][i]],
-                              self.dico_indice2mol[test_data[0][i]])
-                             for i in range(len(test_data[0]))]
-    self.list_ind_test = [(test_data[1][i], test_data[0][i]) for i in range(len(test_data[0]))]
+  def get_pred(self, couple_test, R):
+    list_train_samples = []
+    list_train_labels = []
 
-  def evaluation(self, test_data, test_label, intMat):
-    self.predict(None)
-    aupr_val, auc_val = self.get_perf(intMat)
-    return aupr_val, auc_val
+    list_train_samples_mol, list_train_labels_mol = self.update_with_intra_task_pairs(
+        self.dico_target_of_mol[couple_test[1]][0], self.dico_target_of_mol[couple_test[1]][1],
+        [couple_test[0]], self.K_prot, self.dico_prot2indice, self.threshold_prot)
+    list_train_samples_prot, list_train_labels_prot = self.update_with_intra_task_pairs(
+        self.dico_ligand_of_prot[couple_test[0]][0], self.dico_ligand_of_prot[couple_test[0]][1],
+        [couple_test[1]], self.K_mol, self.dico_mol2indice, self.threshold_mol)
 
-  def predict(self, test_data,):
-    for ind_couples in range(len(self.list_couple_test)):
-      couple_test = self.list_couple_test[ind_couples]
+    for _, el in enumerate(list_train_samples_mol):
+      if (el, couple_test[1]) not in self.forbidden_samples:
+        list_train_samples.append((el, couple_test[1]))
+        list_train_labels.append(list_train_labels_mol[_])
+    for _, el in enumerate(list_train_samples_prot):
+      if (couple_test[0], el) not in self.forbidden_samples:
+        list_train_samples.append((couple_test[0], el))
+        list_train_labels.append(list_train_labels_prot[_])
 
-      list_train_samples = []
-      list_train_labels = []
+    list_train_samples, list_train_labels = self.update_with_extra_task_pairs(
+        couple_test, list_train_samples, list_train_labels)
 
-      list_train_samples_mol, list_train_labels_mol = self.update_with_intra_task_pairs(
-          self.dico_target_of_mol[couple_test[1]][0], self.dico_target_of_mol[couple_test[1]][1],
-          [couple_test[0]], self.K_prot, self.dico_prot2indice, self.threshold_prot)
-      list_train_samples_prot, list_train_labels_prot = self.update_with_intra_task_pairs(
-          self.dico_ligand_of_prot[couple_test[0]][0], self.dico_ligand_of_prot[couple_test[0]][1],
-          [couple_test[1]], self.K_mol, self.dico_mol2indice, self.threshold_mol)
+    K_train, K_test = self.make_Ktrain_and_Ktest_MT(list_train_samples, [couple_test])
 
-      for _, el in enumerate(list_train_samples_mol):
-        if (el, couple_test[1]) not in self.list_couple_test:
-          list_train_samples.append((el, couple_test[1]))
-          list_train_labels.append(list_train_labels_mol[_])
-      for _, el in enumerate(list_train_samples_prot):
-        if (couple_test[0], el) not in self.list_couple_test:
-          list_train_samples.append((couple_test[0], el))
-          list_train_labels.append(list_train_labels_prot[_])
+    clf = svm.SVC(kernel='precomputed', C=self.C, class_weight='balanced')
+    clf.fit(K_train, list_train_labels)
+    return (clf.decision_function(K_test).tolist())[0]
 
-      list_train_samples, list_train_labels = self.update_with_extra_task_pairs(
-          couple_test, list_train_samples, list_train_labels)
-
-      K_train, K_test = self.make_Ktrain_and_Ktest_MT(list_train_samples, [couple_test])
-
-      clf = svm.SVC(kernel='precomputed', C=self.C, class_weight='balanced')
-      clf.fit(K_train, list_train_labels)
-      self.pred[self.list_ind_test[ind_couples][1], self.list_ind_test[ind_couples][0]] = \
-          (clf.decision_function(K_test).tolist())[0]
+  def kernel_combination(self, R, S, new_inx, bandwidth):
+    return S
 
   def get_perf(self, intMat):
     pred_ind = np.where(self.pred != np.inf)
@@ -109,6 +139,98 @@ class NNKronSVM():
     fpr, tpr, thr = roc_curve(test_local, pred_local)
     auc_val = auc(fpr, tpr)
     return aupr_val, auc_val
+
+  def fix_model(self, W, intMat, drugMat, targetMat, seed, epsilon=0.1):
+
+    R = W * intMat
+    m, n = intMat.shape
+    x, y = np.where(R > 0)
+    # # Enforce the positive definite property of similarity matrix
+    drugMat = (drugMat + drugMat.T) / 2 + epsilon * np.eye(m)
+    targetMat = (targetMat + targetMat.T) / 2 + epsilon * np.eye(n)
+    # train_drugs = np.array(list(set(x.tolist())), dtype=np.int32)
+    # train_targets = np.array(list(set(y.tolist())), dtype=np.int32)
+    new_drugs = np.array(list(set(xrange(m)) - set(x.tolist())), dtype=np.int32)
+    new_targets = np.array(list(set(xrange(n)) - set(y.tolist())), dtype=np.int32)
+    drug_bw = self.gamma * m / len(x)
+    target_bw = self.gamma * n / len(x)
+    self.K_mol = self.kernel_combination(R, drugMat, new_drugs, drug_bw)
+    self.K_prot = self.kernel_combination(R.T, targetMat, new_targets, target_bw)
+
+    forbidden_data = np.where(W == 0)
+    self.forbidden_samples = [(self.dico_indice2prot[forbidden_data[1][i]],
+                               self.dico_indice2mol[forbidden_data[0][i]])
+                              for i in range(len(forbidden_data[0]))]
+    # print('forbidden', len(self.forbidden_samples), self.forbidden_samples)
+    # self.list_ind_test = [(test_data[1][i], test_data[0][i]) for i in range(len(test_data[0]))]
+
+  def evaluation(self, test_data, test_label, intMat, R):
+    self.predict(test_data, R)
+    aupr_val, auc_val = self.get_perf(intMat)
+    pred_ind = np.where(self.pred != np.inf)
+    pred_local = self.pred[pred_ind[0], pred_ind[1]]
+    return aupr_val, auc_val, pred_local
+
+  def predict(self, test_data, R):
+    list_couple_test = [(self.dico_indice2prot[test_data[i][1]],
+                         self.dico_indice2mol[test_data[i][0]])
+                        for i in range(test_data.shape[0])]
+    list_ind_test = [(test_data[i][1], test_data[i][0]) for i in range(test_data.shape[0])]
+    for ind_couples in range(len(list_couple_test)):
+        couple_test = list_couple_test[ind_couples]
+        pred = self.get_pred(couple_test, R)
+        self.pred[list_ind_test[ind_couples][1], list_ind_test[ind_couples][0]] = pred
+
+
+    # if self.n_proc == 1:
+    #   for ind_couples in range(len(self.list_couple_test)):
+    #     couple_test = self.list_couple_test[ind_couples]
+    #     pred = self.get_pred(ind_couples, couple_test)
+    #     self.pred[self.list_ind_test[ind_couples][1], self.list_ind_test[ind_couples][0]] = pred
+
+    # else:
+    #   if False:
+    #     from multiprocessing.pool import Pool
+    #     pool = Pool(processes=self.n_proc)
+    #     async_result = []
+
+    #     # for ind_couples in range(len(self.list_couple_test)):
+    #     #   couple_test = self.list_couple_test[ind_couples]
+    #     #   async_result.append(pool.apply_async(get_pred, (self, ind_couples, couple_test)))
+    #     # multiple_results = [res.get() for res in async_result]
+
+    #     async_result = pool.map_async(get_pred, [(self, i_, c_)
+    #                                              for i_, c_ in enumerate(self.list_couple_test)])
+    #     multiple_results = async_result.get()
+
+    #     pool.close()
+    #     pool.join()
+
+    #     # print(multiple_results)
+    #     for ind_couples, pred in enumerate(multiple_results):
+    #       self.pred[self.list_ind_test[ind_couples][1], self.list_ind_test[ind_couples][0]] = pred
+    #   elif True:
+    #     from multiprocessing.pool import Pool
+    #     pool = Pool(processes=self.n_proc)
+    #     async_result = []
+
+    #     n_ = int(np.floor(float(len(self.list_couple_test)) / float(self.n_proc)))
+    #     l_ = []
+    #     for _ in range(self.n_proc):
+    #       if _ < self.n_proc - 1:
+    #         l_.append([(self, i, self.list_couple_test[i]) for i in range(_ * n_, (_ + 1) * n_)])
+    #       else:
+    #         l_.append([(self, i, self.list_couple_test[i]) for i in range(_ * n_, len(self.list_couple_test))])
+
+    #     async_result = pool.map_async(get_pred_joblib2, l_)
+    #     multiple_results = async_result.get()
+
+    #     pool.close()
+    #     pool.join()
+
+    #     for list_res in multiple_results:
+    #       for pred, i_ in list_res:
+    #         self.pred[self.list_ind_test[i_][1], self.list_ind_test[i_][0]] = pred
 
   def __str__(self,):
     return "Model:NNKronSVM, NbNeg:%s, NegNei:%s, PosNei:%s, C:%s" % (self.NbNeg, self.NegNei,
@@ -121,16 +243,22 @@ class NNKronSVM():
 
     for pos_train_sample in list_pos:
         if pos_train_sample not in list_test_samples:
-            if self.condition_on_intra_task(Kernel, dico_2indice, pos_train_sample, list_test_samples[0], threshold):
+            if self.condition_on_intra_task(Kernel, dico_2indice, pos_train_sample,
+                                            list_test_samples[0], threshold):
                 list_train_samples.append(pos_train_sample)
                 list_train_labels.append(1)
+    # print(list_test_samples)
+    # print('len(list_train_samples)', len(list_train_samples), list_train_samples)
 
     if self.NbNeg != "full":
-        nb_pos_sample = len(list_train_samples)
+        nb_pos_sample = len(list_train_samples) if len(list_train_samples) > 0 else 2
         nb_neg_sample = 0
         rand_list_of_indices = randomize_list([i for i in range(len(list_neg_samples))])
         for rand_int in rand_list_of_indices:
-            if list_neg_samples[rand_int] not in list_pos and list_neg_samples[rand_int] not in list_test_samples and list_neg_samples[rand_int] not in list_train_samples and nb_neg_sample < nb_pos_sample * self.NbNeg:
+            if list_neg_samples[rand_int] not in list_pos and \
+                    list_neg_samples[rand_int] not in list_test_samples and \
+                    list_neg_samples[rand_int] not in list_train_samples and \
+                    nb_neg_sample < nb_pos_sample * self.NbNeg:
                 list_train_samples.append(list_neg_samples[rand_int])
                 list_train_labels.append(value_of_neg_class)
                 nb_neg_sample += 1
@@ -140,6 +268,7 @@ class NNKronSVM():
                 list_train_samples.append(neg_sample)
                 list_train_labels.append(value_of_neg_class)
     # print(list_train_samples)
+    # print('len(list_train_samples)', len(list_train_samples))
     return list_train_samples, list_train_labels
 
   def update_with_extra_task_pairs(self, current_couple, list_train_samples, list_train_labels, value_of_neg_class=0):
@@ -170,7 +299,7 @@ class NNKronSVM():
 #            print(self.dico_labels_per_couple[compared_couple[1] + compared_couple[0]])
 #            sys.stdout.flush()
             if compared_couple not in list_train_samples:
-              if compared_couple not in self.list_couple_test:
+              if compared_couple not in self.forbidden_samples:
                 if compared_couple[0] != current_couple[0] and compared_couple[1] != current_couple[1]:
                     if self.condition_on_extra_task(current_couple, compared_couple):
                         # print(compared_couple)
@@ -237,6 +366,166 @@ class NNKronSVM():
                 self.K_prot[ind1_Kprot, ind_t_Kprot] * self.K_mol[ind1_Kmol, ind_t_Kmol]
 
     return K_train, K_test
+
+
+class NNKronSVMGIP(NNKronSVM):
+
+  def kernel_combination(self, R, S, new_inx, bandwidth):
+    K = self.alpha * S + (1.0 - self.alpha) * rbf_kernel(R, gamma=bandwidth)
+    K[new_inx, :] = S[new_inx, :]
+    K[:, new_inx] = S[:, new_inx]
+    return K
+
+
+class NNKronWNNSVMGIP(NNKronSVMGIP):
+
+  def __init__(self, C, t, NbNeg, NegNei, PosNei, dataset, n_proc):
+    self.NbNeg = NbNeg
+    self.PosNei = PosNei
+    self.NegNei = NegNei
+    self.C = C
+    self.n_proc = n_proc
+    self.alpha = 0.5
+    self.gamma = 1.0
+    self.t = t
+
+    if 'drugbank' in dataset:
+        if '2000' in dataset:
+            limit = 2000
+        elif '5000' in dataset:
+            limit = 5000
+        else:
+            limit = None
+        dataset = 'DrugBank'
+
+    self.dico_neerest_nei_per_prot_ID = \
+        pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_prot_ID.data', 'rb'))
+    self.dico_neerest_nei_per_prot_value = \
+        pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_prot_value.data', 'rb'))
+    self.dico_neerest_nei_per_mol_ID = \
+        pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_mol_ID.data', 'rb'))
+    self.dico_neerest_nei_per_mol_value = \
+        pickle.load(open('data/' + dataset + '_dico_neerest_nei_per_mol_value.data', 'rb'))
+
+    self.dico_target_of_mol = \
+        pickle.load(open('data/' + dataset + '_dico_target_of_mol.data', 'rb'))
+    self.dico_ligand_of_prot = \
+        pickle.load(open('data/' + dataset + '_dico_ligand_of_prot.data', 'rb'))
+    self.dico_labels_per_couple = \
+        pickle.load(open('data/' + dataset + '_dico_labels_per_couple.data', 'rb'))
+
+    self.dico_prot2indice = pickle.load(open('data/' + dataset + '_dico_prot2indice.data', 'rb'))
+    self.dico_mol2indice = pickle.load(open('data/' + dataset + '_dico_mol2indice.data', 'rb'))
+    self.dico_indice2prot = pickle.load(open('data/' + dataset + '_dico_indice2prot.data', 'rb'))
+    self.dico_indice2mol = pickle.load(open('data/' + dataset + '_dico_indice2mol.data', 'rb'))
+
+    self.threshold_prot = None
+    self.threshold_mol = None
+
+  def get_pred(self, couple_test, R):
+    # print(couple_test)
+    # mol side
+    list_train_mol_samples, list_train_mol_labels = [], []
+    list_train_samples_mol, list_train_labels_mol = self.update_with_intra_task_pairs(
+        self.dico_target_of_mol[couple_test[1]][0], self.dico_target_of_mol[couple_test[1]][1],
+        [couple_test[0]], self.K_prot, self.dico_prot2indice, self.threshold_prot)
+    for _, el in enumerate(list_train_samples_mol):
+      if (el, couple_test[1]) not in self.forbidden_samples:
+        list_train_mol_samples.append((el, couple_test[1]))
+        list_train_mol_labels.append(list_train_labels_mol[_])
+    if 1 not in list_train_mol_labels:  # orphan mol, we consider WNN
+      # print('orphan mol')
+      inx = np.argsort(self.K_mol[self.dico_mol2indice[couple_test[1]], :])[::-1]
+      nei_local, list_pos_local, list_neg_local = np.zeros(self.K_prot.shape[0]), [], []
+      i = 0
+      for _ in xrange(len(inx)):
+        if np.any(R[inx[_], :] == 1) == True:
+          w = self.t**(i)
+          # print('w', w)
+          if w >= 1e-4:
+            nei_local += w * R[inx[_], :]
+          else:
+            break
+          i += 1
+      for i in range(len(nei_local)):
+        if nei_local[i] >= 0.5:
+            list_pos_local.append(self.dico_indice2prot[i])
+        else:
+            list_neg_local.append(self.dico_indice2prot[i])
+      list_train_mol_samples, list_train_mol_labels = [], []
+      list_train_samples_mol, list_train_labels_mol = self.update_with_intra_task_pairs(
+          list_pos_local, list_neg_local,
+          [couple_test[0]], self.K_prot, self.dico_prot2indice, self.threshold_prot)
+      for _, el in enumerate(list_train_samples_mol):
+          list_train_mol_samples.append((el, couple_test[1]))
+          list_train_mol_labels.append(list_train_labels_mol[_])
+      # print('size mol train', len(np.where(np.asarray(list_train_mol_labels) == 1)[0]))
+
+    # prot side
+    list_train_prot_samples, list_train_prot_labels = [], []
+    list_train_samples_prot, list_train_labels_prot = self.update_with_intra_task_pairs(
+        self.dico_ligand_of_prot[couple_test[0]][0], self.dico_ligand_of_prot[couple_test[0]][1],
+        [couple_test[1]], self.K_mol, self.dico_mol2indice, self.threshold_mol)
+    for _, el in enumerate(list_train_samples_prot):
+      if (couple_test[0], el) not in self.forbidden_samples:
+        list_train_prot_samples.append((couple_test[0], el))
+        list_train_prot_labels.append(list_train_labels_prot[_])
+    if 1 not in list_train_prot_labels:  # orphan mol, we consider WNN
+      # print('orphan prot')
+      inx = np.argsort(self.K_prot[self.dico_prot2indice[couple_test[0]], :])[::-1]
+      nei_local, list_pos_local, list_neg_local = np.zeros(self.K_mol.shape[0]), [], []
+      i = 0
+      for _ in xrange(len(inx)):
+        if np.any(R[:, inx[_]] == 1) == True:
+          w = self.t**(i)
+          # print('w', w)
+          if w >= 1e-4:
+            nei_local += w * R[:, inx[_]]
+          else:
+            break
+          i += 1
+      for i in range(len(nei_local)):
+        if nei_local[i] >= 0.5:
+            list_pos_local.append(self.dico_indice2mol[i])
+        else:
+            list_neg_local.append(self.dico_indice2mol[i])
+      list_train_prot_samples, list_train_prot_labels = [], []
+      list_train_samples_prot, list_train_labels_prot = self.update_with_intra_task_pairs(
+          list_pos_local, list_neg_local,
+          [couple_test[1]], self.K_mol, self.dico_mol2indice, self.threshold_mol)
+      for _, el in enumerate(list_train_samples_prot):
+          list_train_prot_samples.append((couple_test[0], el))
+          list_train_prot_labels.append(list_train_labels_prot[_])
+      # print('size prot train', len(np.where(np.asarray(list_train_prot_labels) == 1)[0]))
+
+    list_train_samples = list_train_mol_samples + list_train_prot_samples
+    list_train_labels = list_train_mol_labels + list_train_prot_labels
+    if couple_test in list_train_samples:
+        print('train in test')
+        exit(1)
+
+    list_train_samples, list_train_labels = self.update_with_extra_task_pairs(
+        couple_test, list_train_samples, list_train_labels)
+
+    K_train, K_test = self.make_Ktrain_and_Ktest_MT(list_train_samples, [couple_test])
+
+    clf = svm.SVC(kernel='precomputed', C=self.C, class_weight='balanced')
+    clf.fit(K_train, list_train_labels)
+    return (clf.decision_function(K_test).tolist())[0]
+
+  def __str__(self,):
+    return "Model:NNKronWNNSVMGIP, NbNeg:%s, NegNei:%s, PosNei:%s, C:%s, T:%s" % \
+        (self.NbNeg, self.NegNei, self.PosNei, self.C, self.t)
+
+
+class NNKronWNNSVM(NNKronWNNSVMGIP):
+
+  def kernel_combination(self, R, S, new_inx, bandwidth):
+    return S
+
+  def __str__(self,):
+    return "Model:NNKronWNNSVM, NbNeg:%s, NegNei:%s, PosNei:%s, C:%s, T:%s" % \
+        (self.NbNeg, self.NegNei, self.PosNei, self.C, self.t)
 
 
 if __name__ == "__main__":
@@ -316,3 +605,4 @@ if __name__ == "__main__":
                     open('data/' + dataset + "_dico_neerest_nei_per_prot_ID.data", 'wb'))
         pickle.dump(dico_neerest_nei_per_value,
                     open('data/' + dataset + "_dico_neerest_nei_per_prot_value.data", 'wb'))
+

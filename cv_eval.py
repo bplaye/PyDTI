@@ -1,107 +1,403 @@
-
 import time
 from functions import *
 from nrlmf import NRLMF
 from netlaprls import NetLapRLS
 from blm import BLMNII
-from wnngip import WNNGIP
+from wnngip import WNNGIP, GIP, NNWNNGIP, NNGIP
 # from kbmf import KBMF
 from cmf import CMF
-from nnkronsvm import NNKronSVM
+from nnkronsvm import NNKronSVM, NNKronSVMGIP, NNKronWNNSVMGIP, NNKronWNNSVM
 import pickle
 
 
-def nrlmf_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
-    max_auc, auc_opt = 0, []
-    for r in [50, 100]:
-        dict_perf[r] = {}
-        for x in np.arange(-5, 2):
-            dict_perf[r][x] = {}
-            for y in np.arange(-5, 3):
-                dict_perf[r][x][y] = {}
-                for z in np.arange(-5, 1):
-                    dict_perf[r][x][y][z] = {}
-                    for t in np.arange(-3, 1):
-                        tic = time.clock()
-                        model = NRLMF(cfix=para['c'], K1=para['K1'], K2=para['K2'], num_factors=r, lambda_d=2**(x), lambda_t=2**(x), alpha=2**(y), beta=2**(z), theta=2**(t), max_iter=100)
-                        cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type +\
-                            "\n" + str(model)
-                        print(cmd)
-                        aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-                        if cv_type != 'loo':
-                            aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-                            auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-                        else:
-                            aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-                        print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-                        if auc_avg > max_auc:
-                            max_auc = auc_avg
-                            auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-                        dict_perf[r][x][y][z][t] = (aupr_vec, auc_vec)
+def get_list_param_and_dict_perf(method):
+    if method in ['wnngip', 'gip']:
+        dict_perf = {}
+        list_param = []
+        for x in np.arange(0.1, 1.1, 0.1):
+            dict_perf[x] = {}
+            for y in np.arange(0.0, 1.1, 0.1):
+                list_param.append((x, y))
+    elif method in ['nnwnngip', 'nngip']:
+        dict_perf = {}
+        list_param = []
+        for x in np.arange(0.1, 1.1, 0.1):
+            dict_perf[x] = {}
+            for y in np.arange(0.0, 1.1, 0.1):
+                dict_perf[x][y] = {}
+                for NN in [1, 2, 3, 5, 10, 20]:
+                    list_param.append((x, y, NN))
+    elif method == 'nrlmf':
+        list_param = []
+        dict_perf = {}
+        for r in [50, 100]:
+            dict_perf[r] = {}
+            for x in np.arange(-5, 2):
+                dict_perf[r][x] = {}
+                for y in np.arange(-5, 3):
+                    dict_perf[r][x][y] = {}
+                    for z in np.arange(-5, 1):
+                        dict_perf[r][x][y][z] = {}
+                        for t in np.arange(-3, 1):
+                            list_param.append((r, x, y, z, t))
+    elif method in ['nnkronsvm', 'nnkronsvmgip']:
+        list_param = []
+        dict_perf = {}
+        for C in [.01, .05, .1, .5, 1., 10., 100., ]:
+          # dict_perf[C] = {}
+          for posnei in [2, 5, 10]:
+            # dict_perf[C][posnei] = {}
+            for negnei in [1, 2, 5]:
+                list_param.append((C, posnei, negnei))
+    elif method in ['nnkronwnnsvmgip', 'nnkronwnnsvm']:
+        list_param = []
+        dict_perf = {}
+        for C in [.01, .05, .1, .5, 1., 10., 100., ]:
+          dict_perf[C] = {}
+          for posnei in [2, 5, 10]:
+            dict_perf[C][posnei] = {}
+            for negnei in [1, 2, 5]:
+              dict_perf[C][posnei][negnei] = {}
+              for t in np.arange(0.1, 1.1, 0.1):
+                  list_param.append((C, posnei, negnei, t))
+    return list_param, dict_perf
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
-    pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
-    cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+def get_model(method, para, par, dataset):
+    if method == 'wnngip':
+      model = WNNGIP(T=par[0], sigma=1, alpha=par[1])
+    elif method == 'gip':
+        model = GIP(T=par[0], sigma=1, alpha=par[1])
+    elif method == 'nngip':
+      model = NNGIP(T=par[0], sigma=1, alpha=par[1], NN=par[2])
+    elif method == 'nnwnngip':
+      model = NNWNNGIP(T=par[0], sigma=1, alpha=par[1], NN=par[2])
+    elif method == 'nrlmf':
+      model = NRLMF(cfix=para['c'], K1=para['K1'], K2=para['K2'], num_factors=par[0],
+                    lambda_d=2**(par[1]), lambda_t=2**(par[1]), alpha=2**(par[2]),
+                    beta=2**(par[3]), theta=2**(par[4]), max_iter=100)
+    elif method == 'nnkronsvm':
+      model = NNKronSVM(C=par[0], NbNeg=para['NbNeg'], NegNei=par[2],
+                        PosNei=par[1], dataset=dataset, n_proc=1)
+    elif method == 'nnkronsvmgip':
+      model = NNKronSVMGIP(C=par[0], NbNeg=para['NbNeg'], NegNei=par[2],
+                           PosNei=par[1], dataset=dataset, n_proc=1)
+    elif method == 'nnkronwnnsvmgip':
+      model = NNKronWNNSVMGIP(C=par[0], t=par[3], NbNeg=para['NbNeg'], NegNei=par[2],
+                              PosNei=par[1], dataset=dataset, n_proc=1)
+    elif method == 'nnkronwnnsvm':
+      model = NNKronWNNSVM(C=par[0], t=par[3], NbNeg=para['NbNeg'], NegNei=par[2],
+                           PosNei=par[1], dataset=dataset, n_proc=1)
+    return model
+
+
+def feed_dict_perf(method, para, par, dict_perf, aupr_vec, auc_vec, pred, test, tic, toc):
+    if method in ['wnngip', 'gip']:
+      dict_perf[par[0]][par[1]] = (aupr_vec, auc_vec, pred, test, tic, toc)
+    elif method in ['nngip', 'nnwnngip']:
+      dict_perf[par[0]][par[1]][par[2]] = (aupr_vec, auc_vec, pred, test, tic, toc)
+    elif method == 'nrlmf':
+      dict_perf[par[0]][par[1]][par[2]][par[3]][par[4]] = (aupr_vec, auc_vec, pred, test, tic, toc)
+    elif method in ['nnkronsvm', 'nnkronsvmgip']:
+      dict_perf[par[0]] = (aupr_vec, auc_vec, pred, test, tic, toc)  # bug here
+    elif method in ['nnkronwnnsvmgip', 'nnkronwnnsvm']:
+      dict_perf[par[0]][par[1]][par[2]][par[3]] = (aupr_vec, auc_vec, pred, test, tic, toc)
+    return dict_perf
+
+
+def eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+    list_param, dict_perf = get_list_param_and_dict_perf(method)
+
+    par = list_param[i_param]
+
+    tic, toc = time.clock(), time.time()
+
+    print('get model')
+    model = get_model(method, para, par, dataset)
+
+    cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type +\
+        "\n" + str(model)
     print(cmd)
 
+    aupr_vec, auc_vec, pred, test = train_single(model, method, dataset, cv_data,
+                                                 X, D, T, cv_type, i_test)
 
-def netlaprls_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
-    max_auc, auc_opt = 0, []
-    for x in np.arange(-6, 3):  # [-6, 2]
-        dict_perf[x] = {}
-        for y in np.arange(-6, 3):  # [-6, 2]
-            tic = time.clock()
-            model = NetLapRLS(gamma_d=10**(x), gamma_t=10**(x), beta_d=10**(y), beta_t=10**(y))
-            cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-                str(model)
-            print(cmd)
-            aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-            if cv_type != 'loo':
-                aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-                auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-            else:
-                aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-            print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-            if auc_avg > max_auc:
-                max_auc = auc_avg
-                auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-            dict_perf[x][y] = (aupr_vec, auc_vec)
+    dict_perf = feed_dict_perf(method, para, par, dict_perf, aupr_vec, auc_vec, pred, test,
+                               time.clock() - tic, time.time() - toc)
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
+    m = get_name_method(method)
+
+    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+        str(i_param) + '_' + str(i_test)
     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
-    cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
-    print(cmd)
+
+# def wnngip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+
+#     x, y = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[x][y] = (aupr_vec, auc_vec,
+#                        pred, test,
+#                        time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
 
-def blmnii_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
+# def gip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             list_param.append((x, y))
+#     x, y = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = GIP(T=x, sigma=1, alpha=y)
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[x][y] = (aupr_vec, auc_vec,
+#                        pred, test,
+#                        time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nngip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             dict_perf[x][y] = {}
+#             for NN in [1, 2, 3, 5, 10, 20]:
+#                 list_param.append((x, y, NN))
+#     x, y, NN = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNGIP(T=x, sigma=1, alpha=y, NN=NN)
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[x][y][NN] = (aupr_vec, auc_vec,
+#                            pred, test,
+#                            time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nnwnngip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             dict_perf[x][y] = {}
+#             for NN in [1, 2, 3, 5, 10, 20]:
+#                 list_param.append((x, y, NN))
+#     x, y, NN = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNWNNGIP(T=x, sigma=1, alpha=y, NN=NN)
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[x][y][NN] = (aupr_vec, auc_vec,
+#                            pred, test,
+#                            time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nnkronsvm_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       for posnei in [2, 5, 10]:
+#         for negnei in [1, 2, 5]:
+#           list_param.append((C, posnei, negnei))
+#     C, posnei, negnei = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNKronSVM(C=C, NbNeg=para['NbNeg'], NegNei=negnei,
+#                       PosNei=posnei, dataset=dataset, n_proc=1)
+#     if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#         model.n_proc = 4
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[C] = (aupr_vec, auc_vec,
+#                     pred, test,
+#                     time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nnkronsvmgip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       for posnei in [2, 5, 10]:
+#         for negnei in [1, 2, 5]:
+#           list_param.append((C, posnei, negnei))
+#     C, posnei, negnei = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNKronSVMGIP(C=C, NbNeg=para['NbNeg'], NegNei=negnei,
+#                          PosNei=posnei, dataset=dataset, n_proc=1)
+#     if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#         model.n_proc = 4
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[C] = (aupr_vec, auc_vec,
+#                     pred, test,
+#                     time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nnkronwnnsvmgip_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+#           dict_perf[C][posnei][negnei] = {}
+#           for t in np.arange(0.1, 1.1, 0.1):
+#             list_param.append((C, posnei, negnei, t))
+#     C, posnei, negnei, t = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNKronWNNSVMGIP(C=C, t=t, NbNeg=para['NbNeg'], NegNei=negnei,
+#                             PosNei=posnei, dataset=dataset, n_proc=1)
+#     if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#         model.n_proc = 4
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[C][posnei][negnei][t] = (aupr_vec, auc_vec,
+#                                        pred, test,
+#                                        time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+# def nnkronwnnsvm_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type, i_param, i_test):
+#     dict_perf = {}
+#     list_param = []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+#           dict_perf[C][posnei][negnei] = {}
+#           for t in np.arange(0.1, 1.1, 0.1):
+#             list_param.append((C, posnei, negnei, t))
+#     C, posnei, negnei, t = list_param[i_param]
+
+#     tic, toc = time.clock(), time.time()
+#     model = NNKronWNNSVM(C=C, t=t, NbNeg=para['NbNeg'], NegNei=negnei,
+#                          PosNei=posnei, dataset=dataset, n_proc=1)
+#     if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#         model.n_proc = 4
+#     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#         str(model)
+#     print(cmd)
+
+#     aupr_vec, auc_vec, pred, test = train_single(model, cv_data, X, D, T, cv_type, i_test)
+
+#     dict_perf[C][posnei][negnei][t] = (aupr_vec, auc_vec,
+#                                        pred, test,
+#                                        time.clock() - tic, time.time() - toc)
+
+#     m = get_name_method(method)
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m + '_' + \
+#         str(i_param) + '_' + str(i_test)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+
+def cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+    list_param, dict_perf = get_list_param_and_dict_perf(method)
+
     max_auc, auc_opt = 0, []
-    for x in np.arange(0, 1.1, 0.1):
-        tic = time.clock()
-        model = BLMNII(alpha=x, avg=False)
-        cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-            str(model)
+    for par in list_param:
+        tic, toc = time.clock(), time.time()
+
+        print('get_model')
+        model = get_model(method, para, par, dataset)
+
+        cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type +\
+            "\n" + str(model)
         print(cmd)
-        aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-        print(aupr_vec)
+
+        aupr_vec, auc_vec = train(model, method, dataset, cv_data, X, D, T, cv_type)
+
         if cv_type != 'loo':
             aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
             auc_avg, auc_conf = mean_confidence_interval(auc_vec)
         else:
             aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-        print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
+        print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
         if auc_avg > max_auc:
             max_auc = auc_avg
             auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-        dict_perf[x] = (aupr_vec, auc_vec)
+        dict_perf = feed_dict_perf(method, para, par, dict_perf, aupr_vec, auc_vec,
+                                   aupr_avg, auc_avg,
+                                   time.clock() - tic, time.time() - toc)
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
+    m = get_name_method(method)
+    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:' + m
     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
@@ -109,128 +405,466 @@ def blmnii_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
     print(cmd)
 
 
-def wnngip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
-    max_auc, auc_opt = 0, []
-    for x in np.arange(0.1, 1.1, 0.1):
-        dict_perf[x] = {}
-        for y in np.arange(0.0, 1.1, 0.1):
-            tic = time.clock()
-            model = WNNGIP(T=x, sigma=1, alpha=y)
-            cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-                str(model)
-            print(cmd)
-            aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-            if cv_type != 'loo':
-                aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-                auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-            else:
-                aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-            print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-            if auc_avg > max_auc:
-                max_auc = auc_avg
-                auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-            dict_perf[x][y] = (aupr_vec, auc_vec)
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for r in [50, 100]:
+#         dict_perf[r] = {}
+#         for x in np.arange(-5, 2):
+#             dict_perf[r][x] = {}
+#             for y in np.arange(-5, 3):
+#                 dict_perf[r][x][y] = {}
+#                 for z in np.arange(-5, 1):
+#                     dict_perf[r][x][y][z] = {}
+#                     for t in np.arange(-3, 1):
+#                         tic, toc = time.clock(), time.time()
+#                         model = NRLMF(cfix=para['c'], K1=para['K1'], K2=para['K2'], num_factors=r, lambda_d=2**(x), lambda_t=2**(x), alpha=2**(y), beta=2**(z), theta=2**(t), max_iter=100)
+#                         cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type +\
+#                             "\n" + str(model)
+#                         print(cmd)
+#                         aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#                         if cv_type != 'loo':
+#                             aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                             auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#                         else:
+#                             aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#                         print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#                         if auc_avg > max_auc:
+#                             max_auc = auc_avg
+#                             auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#                         dict_perf[r][x][y][z][t] = (aupr_vec, auc_vec,
+#                                                     aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                                     time.clock() - tic, time.time() - toc)
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
-    pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
-    cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
-    print(cmd)
-
-
-def kbmf_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
-    max_auc, auc_opt = 0, []
-    for d in [50, 100]:
-        tic = time.clock()
-        model = KBMF(num_factors=d)
-        cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-            str(model)
-        print(cmd)
-        aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-        if cv_type != 'loo':
-            aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-            auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-        else:
-            aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-        print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-        if auc_avg > max_auc:
-            max_auc = auc_avg
-            auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-        dict_perf[d] = (aupr_vec, auc_vec)
-
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
-    pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
-
-    cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
-    print(cmd)
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
 
 
-def cmf_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    dict_perf = {}
-    max_aupr, aupr_opt = 0, []
-    for d in [50, 100]:
-        dict_perf[d] = {}
-        for x in np.arange(-2, -1):
-            dict_perf[d][x] = {}
-            for y in np.arange(-3, -2):
-                dict_perf[d][x][y] = {}
-                for z in np.arange(-3, -2):
-                    tic = time.clock()
-                    model = CMF(K=d, lambda_l=2**(x), lambda_d=2**(y), lambda_t=2**(z), max_iter=30)
-                    cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-                        str(model)
-                    print(cmd)
-                    aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-                    if cv_type != 'loo':
-                        aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-                        auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-                    else:
-                        aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-                    print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-                    if aupr_avg > max_aupr:
-                        max_aupr = aupr_avg
-                        aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-                    dict_perf[d][x][y][z] = (aupr_vec, auc_vec)
+# def netlaprls_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(-6, 3):  # [-6, 2]
+#         dict_perf[x] = {}
+#         for y in np.arange(-6, 3):  # [-6, 2]
+#             tic, toc = time.clock(), time.time()
+#             model = NetLapRLS(gamma_d=10**(x), gamma_t=10**(x), beta_d=10**(y), beta_t=10**(y))
+#             cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                 str(model)
+#             print(cmd)
+#             aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#             if cv_type != 'loo':
+#                 aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                 auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#             else:
+#                 aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#             print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#             if auc_avg > max_auc:
+#                 max_auc = auc_avg
+#                 auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#             dict_perf[x][y] = (aupr_vec, auc_vec,
+#                                aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                time.clock() - tic, time.time() - toc)
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
-    pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NetLapRLS'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
-    cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
-    print(cmd)
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
 
 
-def nnkronsvm_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
-    print(para)
-    dict_perf = {}
-    max_aupr, aupr_opt = 0, []
-    for C in [.0001, .001, .01, .1, 1., 10., 100., 1000]:
-        print(C)
-        tic = time.clock()
-        model = NNKronSVM(C=C, NbNeg=para['NbNeg'], NegNei=para['NegNei'],
-                          PosNei=para['PosNei'], dataset=dataset)
-        cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
-            str(model)
-        print(cmd)
-        aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
-        if cv_type != 'loo':
-            aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
-            auc_avg, auc_conf = mean_confidence_interval(auc_vec)
-        else:
-            aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
-        print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic))
-        if aupr_avg > max_aupr:
-            max_aupr = aupr_avg
-            aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
-        dict_perf[C] = (aupr_vec, auc_vec)
+# def blmnii_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(0, 1.1, 0.1):
+#         tic, toc = time.clock(), time.time()
+#         model = BLMNII(alpha=x, avg=False)
+#         cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#             str(model)
+#         print(cmd)
+#         aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#         print(aupr_vec)
+#         if cv_type != 'loo':
+#             aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#             auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#         else:
+#             aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#         print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#         if auc_avg > max_auc:
+#             max_auc = auc_avg
+#             auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#         dict_perf[x] = (aupr_vec, auc_vec,
+#                         aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                         time.clock() - tic, time.time() - toc)
 
-    data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
-    pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:BLMNII'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
 
-    cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
-    cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
-    print(cmd)
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def wnngip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             tic, toc = time.clock(), time.time()
+#             model = WNNGIP(T=x, sigma=1, alpha=y)
+#             cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                 str(model)
+#             print(cmd)
+#             aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#             if cv_type != 'loo':
+#                 aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                 auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#             else:
+#                 aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#             print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#             if auc_avg > max_auc:
+#                 max_auc = auc_avg
+#                 auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#             dict_perf[x][y] = (aupr_vec, auc_vec,
+#                                aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:RLSWNN'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def gip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             tic, toc = time.clock(), time.time()
+#             model = GIP(T=x, sigma=1, alpha=y)
+#             cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                 str(model)
+#             print(cmd)
+#             aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#             if cv_type != 'loo':
+#                 aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                 auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#             else:
+#                 aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#             print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#             if auc_avg > max_auc:
+#                 max_auc = auc_avg
+#                 auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#             dict_perf[x][y] = (aupr_vec, auc_vec,
+#                                aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:RLS'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def nngip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             dict_perf[x][y] = {}
+#             for NN in [1, 2, 3, 5, 10, 20]:
+#                     tic, toc = time.clock(), time.time()
+#                     model = NNGIP(T=x, sigma=1, alpha=y, NN=NN)
+#                     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                         str(model)
+#                     print(cmd)
+#                     aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#                     if cv_type != 'loo':
+#                         aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                         auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#                     else:
+#                         aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#                     print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#                     if auc_avg > max_auc:
+#                         max_auc = auc_avg
+#                         auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#                     dict_perf[x][y][NN] = (aupr_vec, auc_vec,
+#                                            aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                            time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNRLS'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def nnwnngip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for x in np.arange(0.1, 1.1, 0.1):
+#         dict_perf[x] = {}
+#         for y in np.arange(0.0, 1.1, 0.1):
+#             dict_perf[x][y] = {}
+#             for NN in [1, 2, 3, 5, 10, 20]:
+#                     tic, toc = time.clock(), time.time()
+#                     model = NNWNNGIP(T=x, sigma=1, alpha=y, NN=NN)
+#                     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                         str(model)
+#                     print(cmd)
+#                     aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#                     if cv_type != 'loo':
+#                         aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                         auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#                     else:
+#                         aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#                     print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#                     if auc_avg > max_auc:
+#                         max_auc = auc_avg
+#                         auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#                     dict_perf[x][y][NN] = (aupr_vec, auc_vec,
+#                                            aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                            time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNRLSWNN'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def kbmf_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_auc, auc_opt = 0, []
+#     for d in [50, 100]:
+#         tic, toc = time.clock(), time.time()
+#         model = KBMF(num_factors=d)
+#         cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#             str(model)
+#         print(cmd)
+#         aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#         if cv_type != 'loo':
+#             aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#             auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#         else:
+#             aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#         print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#         if auc_avg > max_auc:
+#             max_auc = auc_avg
+#             auc_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#         dict_perf[d] = (aupr_vec, auc_vec,
+#                         aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                         time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % auc_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (auc_opt[1], auc_opt[2], auc_opt[3], auc_opt[4])
+#     print(cmd)
+
+
+# def cmf_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_aupr, aupr_opt = 0, []
+#     for d in [50, 100]:
+#         dict_perf[d] = {}
+#         for x in np.arange(-2, -1):
+#             dict_perf[d][x] = {}
+#             for y in np.arange(-3, -2):
+#                 dict_perf[d][x][y] = {}
+#                 for z in np.arange(-3, -2):
+#                     tic, toc = time.clock(), time.time()
+#                     model = CMF(K=d, lambda_l=2**(x), lambda_d=2**(y), lambda_t=2**(z), max_iter=30)
+#                     cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                         str(model)
+#                     print(cmd)
+#                     aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#                     if cv_type != 'loo':
+#                         aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                         auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#                     else:
+#                         aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#                     print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#                     if aupr_avg > max_aupr:
+#                         max_aupr = aupr_avg
+#                         aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#                     dict_perf[d][x][y][z] = (aupr_vec, auc_vec,
+#                                              aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                              time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_' + str(model)
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
+#     print(cmd)
+
+
+# def nnkronsvm_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_aupr, aupr_opt = 0, []
+#     for C in [.01, .05, .1, .5, 1., 10., 100., ]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10, 50]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+
+#           tic, toc = time.clock(), time.time()
+#           model = NNKronSVM(C=C, NbNeg=para['NbNeg'], NegNei=negnei,
+#                             PosNei=posnei, dataset=dataset, n_proc=1)
+#           # if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#           #     model.n_proc = 4
+#           cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#               str(model)
+#           print(cmd)
+#           aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#           if cv_type != 'loo':
+#               aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#               auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#           else:
+#               aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#           print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#           if aupr_avg > max_aupr:
+#               max_aupr = aupr_avg
+#               aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#           dict_perf[C][posnei][negnei] = (aupr_vec, auc_vec,
+#                                           aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                           time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNKronSVM'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
+#     print(cmd)
+
+
+# def nnkronsvmgip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_aupr, aupr_opt = 0, []
+#     for C in [.01, .05, .1, .5, 1., 10., 100., ]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10, 50]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+
+#           tic, toc = time.clock(), time.time()
+#           model = NNKronSVMGIP(C=C, NbNeg=para['NbNeg'], NegNei=negnei,
+#                                PosNei=posnei, dataset=dataset, n_proc=1)
+#           # if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#           #     model.n_proc = 4
+#           cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#               str(model)
+#           print(cmd)
+#           aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#           if cv_type != 'loo':
+#               aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#               auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#           else:
+#               aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#           print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#           if aupr_avg > max_aupr:
+#               max_aupr = aupr_avg
+#               aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#           dict_perf[C][posnei][negnei] = (aupr_vec, auc_vec,
+#                                           aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                           time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNKronSVMGIP'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
+#     print(cmd)
+
+
+# def nnkronwnnsvmgip_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_aupr, aupr_opt = 0, []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+#           dict_perf[C][posnei][negnei] = {}
+#           for t in np.arange(0.1, 1.1, 0.1):
+#               tic, toc = time.clock(), time.time()
+#               model = NNKronWNNSVMGIP(C=C, t=t, NbNeg=para['NbNeg'], NegNei=negnei,
+#                                       PosNei=posnei, dataset=dataset, n_proc=1)
+#               # if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#               #     model.n_proc = 4
+#               cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                   str(model)
+#               print(cmd)
+#               aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#               if cv_type != 'loo':
+#                   aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                   auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#               else:
+#                   aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#               print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#               if aupr_avg > max_aupr:
+#                   max_aupr = aupr_avg
+#                   aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#               dict_perf[C][posnei][negnei][t] = (aupr_vec, auc_vec,
+#                                                  aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                                  time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNKronWNNSVMGIP'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
+#     print(cmd)
+
+
+# def nnkronwnnsvm_cv_eval(method, dataset, cv_data, X, D, T, cvs, para, cv_type):
+#     dict_perf = {}
+#     max_aupr, aupr_opt = 0, []
+#     for C in [.01, .05, .1, .5, 1., 10., 100.]:
+#       dict_perf[C] = {}
+#       for posnei in [2, 5, 10]:
+#         dict_perf[C][posnei] = {}
+#         for negnei in [1, 2, 5]:
+#           dict_perf[C][posnei][negnei] = {}
+#           for t in np.arange(0.1, 1.1, 0.1):
+#               tic, toc = time.clock(), time.time()
+#               model = NNKronWNNSVM(C=C, t=t, NbNeg=para['NbNeg'], NegNei=negnei,
+#                                    PosNei=posnei, dataset=dataset, n_proc=1)
+#               # if cv_type in ['fold', 'fold_balanced', 'cluster_fold_balanced']:
+#               #     model.n_proc = 4
+#               cmd = "Dataset:" + dataset + " CVS: " + str(cvs) + " CV: " + cv_type + "\n" +\
+#                   str(model)
+#               print(cmd)
+#               aupr_vec, auc_vec = train(model, cv_data, X, D, T, cv_type)
+#               if cv_type != 'loo':
+#                   aupr_avg, aupr_conf = mean_confidence_interval(aupr_vec)
+#                   auc_avg, auc_conf = mean_confidence_interval(auc_vec)
+#               else:
+#                   aupr_avg, aupr_conf, auc_avg, auc_conf = aupr_vec, 0., auc_vec, 0.
+#               print("auc:%.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f, Time:%.6f,%.6f\n" % (auc_avg, aupr_avg, auc_conf, aupr_conf, time.clock() - tic, time.time() - toc))
+#               if aupr_avg > max_aupr:
+#                   max_aupr = aupr_avg
+#                   aupr_opt = [cmd, auc_avg, aupr_avg, auc_conf, aupr_conf]
+#               dict_perf[C][posnei][negnei][t] = (aupr_vec, auc_vec,
+#                                                  aupr_avg, aupr_conf, auc_avg, auc_conf,
+#                                                  time.clock() - tic, time.time() - toc)
+
+#     data_file = dataset + "_" + str(cvs) + "_" + cv_type + '_Model:NNKronWNNSVM'
+#     pickle.dump(dict_perf, open('results/' + data_file + '.data', 'wb'))
+
+#     cmd = "Optimal parameter setting:\n%s\n" % aupr_opt[0]
+#     cmd += "auc: %.6f, aupr: %.6f, auc_conf:%.6f, aupr_conf:%.6f\n" % (aupr_opt[1], aupr_opt[2], aupr_opt[3], aupr_opt[4])
+#     print(cmd)
